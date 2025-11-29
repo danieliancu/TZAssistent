@@ -1,6 +1,9 @@
 import { Course } from '../types';
 
-const API_URL = '/api/products';
+const PROD_API_URL = 'https://targetzerotraining.co.uk/wp-json/custom/v1/products';
+const DEV_API_URL = '/api/products';
+
+const API_URL = import.meta.env.PROD ? PROD_API_URL : DEV_API_URL;
 
 // Helper to parse "Mon 15th December 2025" to a Date object
 // Returns null if invalid

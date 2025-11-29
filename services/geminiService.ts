@@ -159,6 +159,21 @@ export const sendMessageToGemini = async (
     1.  **Detect Language:** Analyze the language of the user's latest message.
     2.  **Reply Language:** You MUST reply in the EXACT SAME language as the user.
     3.  **Fallback:** If the user's language is ambiguous or cannot be determined, use **English**.
+    
+
+
+    **CRITICAL TRANSLATION EXCEPTION:**
+    - **NEVER TRANSLATE COURSE NAMES.**
+    - Always use the official English name for the course, even if the rest of the sentence is in another language.
+    - Example (Bad): "Am găsit cursuri de Coordonator Lucrări Temporare"
+    - Example (Good): "Am găsit cursuri de **Temporary Works Coordinator**"
+    - Example (Bad): "Examenul de Prim Ajutor"
+    - Example (Good): "Examenul de **First Aid at Work**"
+
+    - **ALWAYS USE ENGLISH VENUE NAMES.**
+    - If the user says "Londra", you MUST search for and display "London".
+    - If the user says "București", you MUST search for "Bucharest" (if applicable) or explain availability in English terms.
+    - Example: User says "cursuri în Londra" -> Search location: "London" -> Reply "Am găsit cursuri în **London**".
 
     DATE & TIME REASONING:
     Users use natural language. Calculate dates relative to Today (${todayISO}) BEFORE calling the tool.

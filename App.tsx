@@ -209,7 +209,7 @@ function App() {
         setIsListening(true);
       } catch (e) {
         console.error("Failed to start speech recognition:", e);
-        // Usually implies it's already started, so we ignore or ensure state sync
+        // If it's already started, we just update the state to match
         setIsListening(true);
       }
     }
