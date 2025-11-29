@@ -1,0 +1,7 @@
+{
+  "name": "TargetZero Course Assistant",
+  "description": "A WhatsApp-style AI agent to find training courses.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
