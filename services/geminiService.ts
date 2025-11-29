@@ -24,16 +24,16 @@ async function generateWithRetry(client: any, params: any, retries = 3, baseDela
       return await client.models.generateContent(params);
     } catch (error: any) {
       // Check for 429 (Resource Exhausted) or 503 (Service Unavailable)
-      const isQuotaError = error.status === 429 || error.code === 429 || 
-                           (error.message && error.message.includes('429'));
+      const isQuotaError = error.status === 429 || error.code === 429 ||
+        (error.message && error.message.includes('429'));
       const isServerOverload = error.status === 503 || error.code === 503;
 
       // Also check for AUTH errors (400/403) which should NOT be retried
       const isAuthError = error.status === 403 || error.status === 400 ||
-                          (error.message && (error.message.includes('API key') || error.message.includes('PERMISSION_DENIED')));
-      
+        (error.message && (error.message.includes('API key') || error.message.includes('PERMISSION_DENIED')));
+
       if (isAuthError) {
-          throw error; // Throw immediately, do not retry
+        throw error; // Throw immediately, do not retry
       }
 
       if ((isQuotaError || isServerOverload) && i < retries - 1) {
@@ -113,9 +113,47 @@ export const sendMessageToGemini = async (
     2.  **getCourseDetails**: Use this when the user asks about CONTENT, EXAMS, SYLLABUS, or PREREQUISITES. (e.g., "What is the pass mark for SMSTS?", "What do I learn?", "Is lunch included?").
 
     CONTEXT RETENTION (CRITICAL):
-    - Always look at the conversation history to determine the "Active Course".
-    - If the user says "yes" or "search for that", refer to the last mentioned course.
-    - If the user asks "What is covered in the exam?", assume it refers to the course currently being discussed.
+    - **Always analyze the FULL conversation history** to extract implicit context.
+    - Track these key details from previous messages:
+      1. **Course Type/Name** (e.g., "SMSTS", "NEBOSH General", "First Aid")
+      2. **Location/Venue** (e.g., "London", "Chelmsford", "Online")
+      3. **Date Range** (e.g., "June 2026", "next week", "March")
+    
+    - When the user asks a follow-up question WITHOUT repeating all details, you MUST:
+      a) Look back at the conversation history
+      b) Extract the missing context (course, location, or date)
+      c) Apply it to the current query
+    
+    - **Examples:**
+      * History: "Show me NEBOSH courses in June 2026" → AI shows NEBOSH General
+      * User: "What about construction?" 
+      * AI should search: "NEBOSH Construction" + "June 2026" (retaining the date!)
+      
+      * History: "SMSTS courses in London"
+      * User: "What about next week?"
+      * AI should search: "SMSTS" + "London" + calculate next week dates
+      
+      * History: "Courses in Chelmsford in March"
+      * User: "Show me NEBOSH"
+      * AI should search: "NEBOSH" + "Chelmsford" + "March"
+    
+    - **BEFORE calling searchCourses**, follow this process:
+      STEP 1: Check current message for course type, location, and date
+      STEP 2: If ANY parameter is missing, scan conversation history backwards
+      STEP 3: Extract the most recent mention of each missing parameter
+      STEP 4: Combine current + historical parameters
+      STEP 5: Call searchCourses with complete parameters
+      
+      Example walkthrough:
+      - History: "Show me NEBOSH courses in June 2026" 
+      - Current: "What about construction?"
+      - STEP 1: Current has course modifier ("construction") but NO date
+      - STEP 2: Date is missing, scan history
+      - STEP 3: Found "June 2026" in previous message
+      - STEP 4: Combine: "NEBOSH Construction" + "June 2026"
+      - STEP 5: searchCourses(query: "NEBOSH Construction", dateStart: "2026-06-01", dateEnd: "2026-06-30")
+
+
 
     LANGUAGE RULES (CRITICAL):
     1.  **Detect Language:** Analyze the language of the user's latest message.
@@ -149,12 +187,19 @@ export const sendMessageToGemini = async (
     3.  **No Results:** If the tool returns no courses, suggest closest alternatives or ask for clarification.
     
     VISUAL PRESENTATION RULE (CRITICAL):
-    - If you populate 'suggested_course_ids', the User Interface will automatically display detailed cards for these courses.
+    - The 'searchCourses' tool returns an object with a 'courses' array.
+    - Each course object in the array has an 'id' field (number).
+    - **Extract the 'id' from each course** and populate 'suggested_course_ids' with these IDs.
+    - Example: If tool returns {courses: [{id: 123, name: "SMSTS"}, {id: 456, name: "SSSTS"}]}, 
+      then suggested_course_ids should be [123, 456].
+    - **IMPORTANT:** If the tool returns {courses: [], message: "No courses found..."}, 
+      DO NOT say "I found courses". Instead, inform the user that no courses were found and suggest alternatives.
+    - The User Interface will automatically display detailed cards for courses in 'suggested_course_ids'.
     - **DO NOT list the courses in your text reply.**
-    - **DO NOT mention specific dates, prices, or venues in the text reply** if they are already in the cards.
+    - **DO NOT mention specific dates, prices, or venues in the text reply** if they are in the cards.
     - Your text reply must be ONLY a short introductory sentence.
     - Example of GOOD reply: "I found the following SMSTS courses for next week:"
-    - Example of BAD reply: "I found courses on Monday 12th, Tuesday 13th... [list of data]" -> NEVER DO THIS.
+    - Example of BAD reply: "I found courses on Monday 12th, Tuesday 13th... [list of data]" → NEVER DO THIS.
   `;
 
   const responseSchema = {
@@ -207,7 +252,7 @@ export const sendMessageToGemini = async (
       config: {
         systemInstruction: systemInstruction,
         tools: [{ functionDeclarations: [searchCoursesTool, getCourseDetailsTool] }],
-        temperature: 0.2, 
+        temperature: 0.2,
       },
     });
 
@@ -225,13 +270,16 @@ export const sendMessageToGemini = async (
 
       // Execute the function(s)
       const functionResponses = [];
-      
+
       for (const call of functionCalls) {
         // HANDLER 1: SEARCH
         if (call.name === 'searchCourses' && call.args) {
           const args = call.args as any;
-          console.log("Executing Tool: searchCourses", args);
-          
+          console.log("🔍 Executing Tool: searchCourses");
+          console.log("   Query:", args.query);
+          console.log("   Date Start:", args.dateStart);
+          console.log("   Date End:", args.dateEnd);
+
           // --- ANALYTICS TRACKING ---
           let dateInfo = "Anytime";
           if (args.dateStart || args.dateEnd) dateInfo = `${args.dateStart || ''} to ${args.dateEnd || ''}`;
@@ -243,6 +291,12 @@ export const sendMessageToGemini = async (
             dateStart: args.dateStart,
             dateEnd: args.dateEnd
           });
+
+          console.log("   Results found:", searchResult.courses?.length || 0);
+          if (searchResult.courses && searchResult.courses.length > 0) {
+            console.log("   First 3 course IDs:", searchResult.courses.slice(0, 3).map(c => c.id));
+          }
+
           functionResponses.push({
             functionResponse: {
               name: 'searchCourses',
@@ -251,24 +305,24 @@ export const sendMessageToGemini = async (
             }
           });
         }
-        
+
         // HANDLER 2: DETAILS
         if (call.name === 'getCourseDetails' && call.args) {
-            const args = call.args as any;
-            console.log("Executing Tool: getCourseDetails", args);
-            
-            // --- ANALYTICS TRACKING ---
-            analytics.logSearch(args.courseType, "Content Query");
-            // --------------------------
+          const args = call.args as any;
+          console.log("Executing Tool: getCourseDetails", args);
 
-            const detailResult = getCourseDetails(args.courseType);
-            functionResponses.push({
-              functionResponse: {
-                name: 'getCourseDetails',
-                id: call.id,
-                response: { result: detailResult }
-              }
-            });
+          // --- ANALYTICS TRACKING ---
+          analytics.logSearch(args.courseType, "Content Query");
+          // --------------------------
+
+          const detailResult = getCourseDetails(args.courseType);
+          functionResponses.push({
+            functionResponse: {
+              name: 'getCourseDetails',
+              id: call.id,
+              response: { result: detailResult }
+            }
+          });
         }
       }
 
@@ -290,40 +344,63 @@ export const sendMessageToGemini = async (
         },
       });
     } else {
-        // Fallback for simple chat or if no tools were called
-        const text = response.text || "";
-        if (!text.trim().startsWith('{')) {
-             response = await generateWithRetry(client, {
-                model: "gemini-2.5-flash",
-                contents: contents,
-                config: {
-                    systemInstruction: systemInstruction,
-                    responseMimeType: "application/json",
-                    responseSchema: responseSchema,
-                    temperature: 0.2,
-                },
-            });
-        }
+      // Fallback for simple chat or if no tools were called
+      const text = response.text || "";
+      if (!text.trim().startsWith('{')) {
+        response = await generateWithRetry(client, {
+          model: "gemini-2.5-flash",
+          contents: contents,
+          config: {
+            systemInstruction: systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: responseSchema,
+            temperature: 0.2,
+          },
+        });
+      }
     }
 
     const textResponse = response.text;
     if (!textResponse) throw new Error("Empty response from AI");
 
     const parsed: AIResponseSchema = JSON.parse(textResponse);
+
+    // POST-PROCESSING: Detect misleading responses
+    // Only correct if AI uses very specific phrases that imply cards will be shown
+    const stronglyClaimsFindingCourses = parsed.reply.toLowerCase().includes('i found the following') ||
+      parsed.reply.toLowerCase().includes('here are the') ||
+      parsed.reply.toLowerCase().includes('these courses');
+
+    if (stronglyClaimsFindingCourses && (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0)) {
+      console.warn("AI strongly claimed to find courses but returned empty IDs. Correcting response.");
+      // Override with a proper "no results" message
+      parsed.reply = "I couldn't find any courses matching those exact criteria. Would you like to search for other dates or course types?";
+    }
+
     return parsed;
 
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    
+
+    // Handle empty model output error
+    if (error.message && error.message.includes('model output must contain')) {
+      console.warn("Empty model output - retrying with simpler prompt");
+      return {
+        reply: "I didn't quite understand that. Could you please rephrase your question? For example: 'Show me SMSTS courses in London'",
+        suggested_course_ids: [],
+        disambiguation_options: []
+      };
+    }
+
     // Pass the specific error type back to the UI
     if (error.status === 429 || (error.message && error.message.includes('429'))) {
-        throw new Error("QUOTA_EXCEEDED");
+      throw new Error("QUOTA_EXCEEDED");
     }
     // Re-throw critical auth errors so App.tsx can handle them
     if (error.status === 403 || error.status === 400 || (error.message && (error.message.includes('API key') || error.message.includes('PERMISSION_DENIED')))) {
-        throw error;
+      throw error;
     }
-    
+
     return {
       reply: "I'm experiencing high traffic right now. Please try again in a few seconds.",
       suggested_course_ids: [],

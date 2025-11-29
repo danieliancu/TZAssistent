@@ -1,6 +1,6 @@
 import { Course } from '../types';
 
-const API_URL = 'https://targetzerotraining.co.uk/wp-json/custom/v1/products';
+const API_URL = '/api/products';
 
 // Helper to parse "Mon 15th December 2025" to a Date object
 // Returns null if invalid
@@ -11,7 +11,7 @@ function parseCourseDate(dateStr: string): Date | null {
     const cleaned = dateStr
       .replace(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+/i, '')
       .replace(/(\d+)(st|nd|rd|th)/, '$1');
-    
+
     const date = new Date(cleaned);
     return isNaN(date.getTime()) ? null : date;
   } catch (e) {
@@ -26,12 +26,12 @@ export const fetchCourses = async (): Promise<Course[]> => {
       throw new Error('Network response was not ok');
     }
     const data = await response.json();
-    
+
     // The API might return an object with keys or an array. 
     // Based on the prompt description, it's likely an array of objects.
     // If it's an object with numeric keys, we convert to array.
     let courses: Course[] = [];
-    
+
     if (Array.isArray(data)) {
       courses = data;
     } else if (typeof data === 'object' && data !== null) {
@@ -51,9 +51,9 @@ export const fetchCourses = async (): Promise<Course[]> => {
 
     // Sort by date ascending
     validCourses.sort((a, b) => {
-       const da = parseCourseDate(a.start_date) || new Date(0);
-       const db = parseCourseDate(b.start_date) || new Date(0);
-       return da.getTime() - db.getTime();
+      const da = parseCourseDate(a.start_date) || new Date(0);
+      const db = parseCourseDate(b.start_date) || new Date(0);
+      return da.getTime() - db.getTime();
     });
 
     return validCourses;
@@ -69,8 +69,8 @@ export const getSimplifiedCourseContext = (courses: Course[]): string => {
     courses.map(c => {
       // Convert to ISO string for easier LLM reasoning (YYYY-MM-DD)
       const dateObj = parseCourseDate(c.start_date);
-      const formattedDate = dateObj 
-        ? `${dateObj.toISOString().split('T')[0]} (${dateObj.toLocaleDateString('en-GB', { weekday: 'long' })})` 
+      const formattedDate = dateObj
+        ? `${dateObj.toISOString().split('T')[0]} (${dateObj.toLocaleDateString('en-GB', { weekday: 'long' })})`
         : c.start_date;
 
       return {
@@ -87,11 +87,11 @@ export const getSimplifiedCourseContext = (courses: Course[]): string => {
 
 // SEARCH FUNCTION FOR AI TOOL USE
 export const searchLocalCourses = (
-  allCourses: Course[], 
+  allCourses: Course[],
   criteria: { query?: string; dateStart?: string; dateEnd?: string }
-): string => {
+): { courses: any[]; message?: string } => {
   const { query, dateStart, dateEnd } = criteria;
-  
+
   let filtered = allCourses;
 
   // 1. Filter by Text (Name or Reference)
@@ -108,28 +108,48 @@ export const searchLocalCourses = (
   if (dateStart || dateEnd) {
     const start = dateStart ? new Date(dateStart) : null;
     const end = dateEnd ? new Date(dateEnd) : null;
-    
+
     // Adjust logic to be inclusive
     if (end) end.setHours(23, 59, 59, 999);
 
     filtered = filtered.filter(c => {
       const cDate = parseCourseDate(c.start_date);
       if (!cDate) return false;
-      
+
       if (start && cDate < start) return false;
       if (end && cDate > end) return false;
-      
+
       return true;
     });
   }
 
   // Limit results to prevent token overflow if search is too broad
-  const MAX_RESULTS = 25; 
+  const MAX_RESULTS = 25;
   const limitedResults = filtered.slice(0, MAX_RESULTS);
 
   if (limitedResults.length === 0) {
-    return "No courses found matching the criteria.";
+    return {
+      courses: [],
+      message: "No courses found matching the criteria."
+    };
   }
 
-  return getSimplifiedCourseContext(limitedResults);
+  // Return simplified course objects with essential fields
+  const simplifiedCourses = limitedResults.map(c => {
+    const dateObj = parseCourseDate(c.start_date);
+    const formattedDate = dateObj
+      ? `${dateObj.toISOString().split('T')[0]} (${dateObj.toLocaleDateString('en-GB', { weekday: 'long' })})`
+      : c.start_date;
+
+    return {
+      id: c.id,
+      ref: c.reference ? c.reference.toUpperCase() : '',
+      name: c.name.split('|')[0].trim(),
+      date: formattedDate,
+      venue: c.venue,
+      price: c.price
+    };
+  });
+
+  return { courses: simplifiedCourses };
 };

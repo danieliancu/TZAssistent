@@ -50,7 +50,7 @@ export const CourseCard: React.FC<CourseCardProps> = ({ course, onVisit }) => {
             onClick={() => onVisit && onVisit(cleanName)}
             className="mt-auto block w-full text-center py-2 bg-[#f0f2f5] hover:bg-[#25d366] hover:text-white text-[#008069] font-semibold rounded-md transition-colors text-sm border border-transparent hover:border-[#25d366]"
         >
-            See Details
+            Book now
         </a>
       </div>
     </div>
