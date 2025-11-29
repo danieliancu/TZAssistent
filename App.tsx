@@ -103,9 +103,10 @@ function App() {
         try {
           const currentTranscript = Array.from(event.results)
             .map((result: any) => result[0] ? result[0].transcript : '')
-            .join('');
+            .filter((text, index, array) => text !== array[index - 1]) // Deduplicate consecutive identical results (Android bug fix)
+            .join(' '); // Join with space to prevent "HelloWorld"
 
-          setInputValue(currentTranscript);
+          setInputValue(currentTranscript.trim());
         } catch (e) {
           console.error("Error processing speech result", e);
         }
