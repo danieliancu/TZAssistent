@@ -56,7 +56,11 @@ const searchCoursesTool: FunctionDeclaration = {
     properties: {
       query: {
         type: Type.STRING,
-        description: "The course name, acronym, or reference (e.g., 'SMSTS', 'First Aid', 'Traffic Marshal')."
+        description: "The course name, acronym, or reference (e.g., 'SMSTS', 'First Aid', 'Traffic Marshal'). Do NOT include city/venue here."
+      },
+      location: {
+        type: Type.STRING,
+        description: "The city or venue (e.g., 'London', 'Online', 'Chelmsford')."
       },
       dateStart: {
         type: Type.STRING,
@@ -292,6 +296,7 @@ export const sendMessageToGemini = async (
           const args = call.args as any;
           console.log("🔍 Executing Tool: searchCourses");
           console.log("   Query:", args.query);
+          console.log("   Location:", args.location);
           console.log("   Date Start:", args.dateStart);
           console.log("   Date End:", args.dateEnd);
 
@@ -303,6 +308,7 @@ export const sendMessageToGemini = async (
 
           const searchResult = searchLocalCourses(allCourses, {
             query: args.query,
+            location: args.location,
             dateStart: args.dateStart,
             dateEnd: args.dateEnd
           });

@@ -2,7 +2,6 @@ import { Course } from '../types';
 
 const PROD_API_URL = 'https://targetzerotraining.co.uk/wp-json/custom/v1/products';
 const DEV_API_URL = '/api/products';
-
 const API_URL = import.meta.env.PROD ? PROD_API_URL : DEV_API_URL;
 
 // Helper to parse "Mon 15th December 2025" to a Date object
@@ -91,9 +90,9 @@ export const getSimplifiedCourseContext = (courses: Course[]): string => {
 // SEARCH FUNCTION FOR AI TOOL USE
 export const searchLocalCourses = (
   allCourses: Course[],
-  criteria: { query?: string; dateStart?: string; dateEnd?: string }
+  criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string }
 ): { courses: any[]; message?: string } => {
-  const { query, dateStart, dateEnd } = criteria;
+  const { query, location, dateStart, dateEnd } = criteria;
 
   let filtered = allCourses;
 
@@ -105,6 +104,12 @@ export const searchLocalCourses = (
       const refMatch = c.reference && c.reference.toLowerCase().includes(q);
       return nameMatch || refMatch;
     });
+  }
+
+  // 2. Filter by Location (Venue)
+  if (location && location.trim() !== '') {
+    const loc = location.toLowerCase().trim();
+    filtered = filtered.filter(c => c.venue.toLowerCase().includes(loc));
   }
 
   // 2. Filter by Date Range
