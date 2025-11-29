@@ -101,12 +101,25 @@ function App() {
 
       recognition.onresult = (event: any) => {
         try {
-          const currentTranscript = Array.from(event.results)
-            .map((result: any) => result[0] ? result[0].transcript : '')
-            .filter((text, index, array) => text !== array[index - 1]) // Deduplicate consecutive identical results (Android bug fix)
-            .join(' '); // Join with space to prevent "HelloWorld"
+          const results = Array.from(event.results);
+          let finalTranscript = '';
 
-          setInputValue(currentTranscript.trim());
+          for (let i = 0; i < results.length; i++) {
+            const result = results[i] as any;
+            const text = result[0] ? result[0].transcript : '';
+
+            // Android Chrome Fix:
+            // If the new segment starts with the existing transcript (or is very similar), 
+            // it's likely an accumulation/correction, so we replace instead of append.
+            if (finalTranscript.length > 0 && text.trim().toLowerCase().startsWith(finalTranscript.trim().toLowerCase())) {
+              finalTranscript = text;
+            } else {
+              // Standard append
+              finalTranscript += (finalTranscript ? ' ' : '') + text;
+            }
+          }
+
+          setInputValue(finalTranscript);
         } catch (e) {
           console.error("Error processing speech result", e);
         }
