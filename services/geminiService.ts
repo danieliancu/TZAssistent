@@ -60,7 +60,7 @@ const searchCoursesTool: FunctionDeclaration = {
       },
       location: {
         type: Type.STRING,
-        description: "The city or venue (e.g., 'London', 'Online', 'Chelmsford')."
+        description: "The city or venue (e.g., 'London', 'Online', 'Chelmsford'). Can be a comma-separated list of multiple locations (e.g., 'London, Stratford, Wembley')."
       },
       dateStart: {
         type: Type.STRING,
@@ -164,9 +164,23 @@ export const sendMessageToGemini = async (
     2.  **Reply Language:** You MUST reply in the EXACT SAME language as the user.
     3.  **Fallback:** If the user's language is ambiguous or cannot be determined, use **English**.
     
+    GEOGRAPHY & PROXIMITY (CRITICAL):
+    - The database does NOT have geospatial intelligence. You must bridge this gap.
+    - **Expand Location Queries:** If the user asks for a major city or region, you MUST search for that city AND its known districts/boroughs.
+    - **Pass multiple terms** to the 'location' parameter, separated by commas.
+    
+    **KNOWLEDGE BASE (Use these mappings):**
+    - **"London"** -> query location: "London, Stratford, Wembley, Ilford, Barking, Harrow, Enfield, Dartford, Romford, Uxbridge, Heathrow, Waltham Abbey"
+    - **"Essex"** -> query location: "Essex, Chelmsford, Brentwood, Basildon, Colchester, Harlow, Romford, Ilford, Barking, Waltham Abbey"
+    - **"Kent"** -> query location: "Kent, Dartford, Maidstone, Ashford, Canterbury"
+    - **"Birmingham"** -> query location: "Birmingham, Solihull, Walsall, Wolverhampton"
+    - **"Manchester"** -> query location: "Manchester, Salford, Bolton, Stockport"
+    
+    *Example:*
+    - User: "Courses in London"
+    - Tool Call: searchCourses(location: "London, Stratford, Wembley, Ilford, Barking")
 
-
-    **CRITICAL TRANSLATION EXCEPTION:**
+    CRITICAL TRANSLATION EXCEPTION:
     - **NEVER TRANSLATE COURSE NAMES.**
     - Always use the official English name for the course, even if the rest of the sentence is in another language.
     - Example (Bad): "Am găsit cursuri de Coordonator Lucrări Temporare"
@@ -177,7 +191,7 @@ export const sendMessageToGemini = async (
     - **ALWAYS USE ENGLISH VENUE NAMES.**
     - If the user says "Londra", you MUST search for and display "London".
     - If the user says "București", you MUST search for "Bucharest" (if applicable) or explain availability in English terms.
-    - Example: User says "cursuri în Londra" -> Search location: "London" -> Reply "Am găsit cursuri în **London**".
+    - Example: User says "cursuri în Londra" -> Search location: "London, Stratford, Wembley" -> Reply "Am găsit cursuri în **London**".
 
     DATE & TIME REASONING:
     Users use natural language. Calculate dates relative to Today (${todayISO}) BEFORE calling the tool.
@@ -219,6 +233,12 @@ export const sendMessageToGemini = async (
     - Your text reply must be ONLY a short introductory sentence.
     - Example of GOOD reply: "I found the following SMSTS courses for next week:"
     - Example of BAD reply: "I found courses on Monday 12th, Tuesday 13th... [list of data]" → NEVER DO THIS.
+
+    FALLBACK RESPONSE RULE (CRITICAL):
+    - If the tool returns a message containing "FALLBACK_TO_ONLINE", you MUST reply with this EXACT phrase (translated to user's language):
+    - English: "I couldn't find courses in that area, but here are some Online alternatives. Let me know if you'd like to check other dates or locations."
+    - Romanian: "Nu am găsit în zona respectivă, acestea sunt alternativele online. Spune-mi dacă vrei să caut și alte locații sau date."
+    - DO NOT mention the specific locations you searched for (e.g., don't say "Harrow, Enfield, Wembley"). Keep it generic.
   `;
 
   const responseSchema = {

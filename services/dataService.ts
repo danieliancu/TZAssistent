@@ -106,19 +106,33 @@ export const searchLocalCourses = (
     });
   }
 
-  // 2. Filter by Location (Venue)
+  // 2. Filter by Location (Venue) - Supports multiple comma-separated values (OR logic)
   if (location && location.trim() !== '') {
-    const loc = location.toLowerCase().trim();
-    filtered = filtered.filter(c => c.venue.toLowerCase().includes(loc));
+    const locationTerms = location.split(',').map(l => l.trim().toLowerCase()).filter(l => l.length > 0);
+
+    if (locationTerms.length > 0) {
+      filtered = filtered.filter(c => {
+        const venueLower = c.venue.toLowerCase();
+        // Match if venue contains ANY of the search terms
+        return locationTerms.some(term => venueLower.includes(term));
+      });
+    }
   }
 
   // 2. Filter by Date Range
   if (dateStart || dateEnd) {
-    const start = dateStart ? new Date(dateStart) : null;
-    const end = dateEnd ? new Date(dateEnd) : null;
+    let start: Date | null = null;
+    if (dateStart) {
+      const [y, m, d] = dateStart.split('-').map(Number);
+      start = new Date(y, m - 1, d); // Local Midnight
+    }
 
-    // Adjust logic to be inclusive
-    if (end) end.setHours(23, 59, 59, 999);
+    let end: Date | null = null;
+    if (dateEnd) {
+      const [y, m, d] = dateEnd.split('-').map(Number);
+      end = new Date(y, m - 1, d); // Local Midnight
+      end.setHours(23, 59, 59, 999); // Local End of Day
+    }
 
     filtered = filtered.filter(c => {
       const cDate = parseCourseDate(c.start_date);
@@ -134,6 +148,26 @@ export const searchLocalCourses = (
   // Limit results to prevent token overflow if search is too broad
   const MAX_RESULTS = 25;
   const limitedResults = filtered.slice(0, MAX_RESULTS);
+
+  // FALLBACK LOGIC: If no courses found in specific location, try ONLINE
+  if (limitedResults.length === 0 && location && location.trim() !== '' && !location.toLowerCase().includes('online')) {
+    console.log(`No courses found in ${location}. Trying fallback to 'Online'...`);
+
+    // Recursive call for Online courses
+    const onlineResult = searchLocalCourses(allCourses, {
+      query,
+      location: 'Online',
+      dateStart,
+      dateEnd
+    });
+
+    if (onlineResult.courses && onlineResult.courses.length > 0) {
+      return {
+        courses: onlineResult.courses,
+        message: `FALLBACK_TO_ONLINE`
+      };
+    }
+  }
 
   if (limitedResults.length === 0) {
     return {
