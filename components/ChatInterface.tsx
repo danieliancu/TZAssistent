@@ -24,7 +24,7 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
     return relevantCourses.filter(course => {
       const cleanName = course.name.split('|')[0].trim();
       const key = `${cleanName}|${course.start_date}|${course.venue}`;
-      
+
       if (seen.has(key)) {
         return false;
       }
@@ -43,10 +43,10 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
       });
     }
   };
-  
+
   // Analytics handler
   const handleCardClick = (courseName: string) => {
-      analytics.logConversion(courseName);
+    analytics.logConversion(courseName);
   };
 
   if (uniqueCourses.length === 0) return null;
@@ -55,7 +55,7 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
     <div className="relative group w-full mt-3">
       {/* Left Button - Only show if enough items to potentially scroll */}
       {uniqueCourses.length > 1 && (
-        <button 
+        <button
           onClick={() => scroll('left')}
           className="absolute left-0 top-1/2 -translate-y-1/2 -ml-2 z-10 bg-white/90 hover:bg-white text-gray-600 hover:text-[#00a884] rounded-full p-2 shadow-md border border-gray-100 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 hidden md:flex items-center justify-center"
           aria-label="Scroll left"
@@ -65,7 +65,7 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
       )}
 
       {/* Scroll Container */}
-      <div 
+      <div
         ref={scrollContainerRef}
         className="flex gap-4 px-1 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory relative z-0"
       >
@@ -78,7 +78,7 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
 
       {/* Right Button */}
       {uniqueCourses.length > 1 && (
-        <button 
+        <button
           onClick={() => scroll('right')}
           className="absolute right-0 top-1/2 -translate-y-1/2 -mr-2 z-10 bg-white/90 hover:bg-white text-gray-600 hover:text-[#00a884] rounded-full p-2 shadow-md border border-gray-100 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 hidden md:flex items-center justify-center"
           aria-label="Scroll right"
@@ -111,26 +111,30 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
       {/* Intro Message */}
       {messages.length === 0 && (
         <div className="flex justify-center my-8">
-            <div className="bg-[#fff5c4] text-gray-800 text-xs md:text-sm px-4 py-2 rounded-lg shadow-sm text-center max-w-sm">
-                Hi! I am your TargetZero agent. Ask me about available courses (e.g., SMSTS, First Aid) and I will help you find the best option.
-            </div>
+          <div className="bg-[#fff5c4] text-gray-800 text-xs md:text-sm px-4 py-2 rounded-lg shadow-sm text-center max-w-sm">
+            Hi! I am your TargetZero agent. Ask me about available courses (e.g., SMSTS, First Aid) and I will help you find the best option.
+          </div>
         </div>
       )}
 
       {messages.map((msg) => {
         const isUser = msg.role === 'user';
-        
+
         return (
           <div key={msg.id} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
             {/* Bubble */}
-            <div 
-              className={`relative max-w-[90%] md:max-w-[70%] rounded-lg px-4 py-2 shadow-sm text-sm md:text-base leading-relaxed break-words whitespace-pre-wrap ${
-                isUser 
-                  ? 'bg-[#d9fdd3] text-gray-900 rounded-tr-none' 
+            <div
+              className={`relative max-w-[90%] md:max-w-[70%] rounded-lg px-4 py-2 shadow-sm text-sm md:text-base leading-relaxed break-words whitespace-pre-wrap ${isUser
+                  ? 'bg-[#d9fdd3] text-gray-900 rounded-tr-none'
                   : 'bg-white text-gray-900 rounded-tl-none'
-              }`}
+                }`}
             >
-              {msg.text}
+              {msg.text.split(/(\*\*.*?\*\*)/g).map((part, index) => {
+                if (part.startsWith('**') && part.endsWith('**')) {
+                  return <strong key={index} className="font-bold">{part.slice(2, -2)}</strong>;
+                }
+                return part;
+              })}
               <div className={`text-[10px] mt-1 text-right ${isUser ? 'text-gray-500' : 'text-gray-400'}`}>
                 {formatTime(msg.timestamp)}
               </div>
@@ -153,7 +157,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
 
             {/* Course Cards Container (Carousel) */}
             {msg.courseIds && msg.courseIds.length > 0 && (
-                <CourseCarousel courseIds={msg.courseIds} allCourses={allCourses} />
+              <CourseCarousel courseIds={msg.courseIds} allCourses={allCourses} />
             )}
           </div>
         );
@@ -161,13 +165,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
 
       {isLoading && (
         <div className="flex items-start">
-            <div className="bg-white rounded-lg rounded-tl-none px-4 py-3 shadow-sm">
-                <div className="flex space-x-2">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-75"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-150"></div>
-                </div>
+          <div className="bg-white rounded-lg rounded-tl-none px-4 py-3 shadow-sm">
+            <div className="flex space-x-2">
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-75"></div>
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-150"></div>
             </div>
+          </div>
         </div>
       )}
       <div ref={messagesEndRef} />

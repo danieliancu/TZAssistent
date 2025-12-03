@@ -174,7 +174,7 @@ function App() {
       // Only send the last 10 messages to the AI for context retention.
       const historyContext = newMessages.slice(-10);
 
-      const response = await sendMessageToGemini(textToSend, historyContext, courses);
+      const response = await sendMessageToGemini(textToSend, historyContext, courses, language);
 
       const botMsg: ChatMessage = {
         id: generateId(),

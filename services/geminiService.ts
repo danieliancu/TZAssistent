@@ -93,10 +93,13 @@ const getCourseDetailsTool: FunctionDeclaration = {
 export const sendMessageToGemini = async (
   prompt: string | { audioData: string; mimeType: string },
   history: ChatMessage[],
-  allCourses: Course[]
+  allCourses: Course[],
+  userLanguage: string = 'en-US' // Default to English
 ): Promise<AIResponseSchema> => {
   const client = initAI();
   if (!client) throw new Error("AI Client not initialized");
+
+
 
   // Use English/International date format for the system context
   const today = new Date().toLocaleDateString('en-GB', {
@@ -410,12 +413,48 @@ export const sendMessageToGemini = async (
     // Only correct if AI uses very specific phrases that imply cards will be shown
     const stronglyClaimsFindingCourses = parsed.reply.toLowerCase().includes('i found the following') ||
       parsed.reply.toLowerCase().includes('here are the') ||
-      parsed.reply.toLowerCase().includes('these courses');
+      parsed.reply.toLowerCase().includes('these courses') ||
+      parsed.reply.toLowerCase().includes('iată câteva opțiuni') ||
+      parsed.reply.toLowerCase().includes('am găsit') ||
+      parsed.reply.toLowerCase().includes('acestea sunt');
+
+    // RECOVERY LOGIC: If AI found courses via tool but forgot to include IDs, recover them.
+    if (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0) {
+      // Look for the last searchCourses result in the conversation history we just built
+      const lastFunctionResponse = contents
+        .slice().reverse() // Search from end
+        .find(c => c.role === 'user' && c.parts?.some((p: any) => p.functionResponse?.name === 'searchCourses'));
+
+      if (lastFunctionResponse) {
+        const searchPart = lastFunctionResponse.parts.find((p: any) => p.functionResponse?.name === 'searchCourses');
+        const searchResult = searchPart?.functionResponse?.response?.result;
+
+        if (searchResult?.courses && Array.isArray(searchResult.courses) && searchResult.courses.length > 0) {
+          console.warn("AI found courses via tool but failed to include IDs. Auto-recovering IDs.");
+          parsed.suggested_course_ids = searchResult.courses.map((c: any) => c.id);
+        }
+      }
+    }
 
     if (stronglyClaimsFindingCourses && (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0)) {
       console.warn("AI strongly claimed to find courses but returned empty IDs. Correcting response.");
-      // Override with a proper "no results" message
-      parsed.reply = "I couldn't find any courses matching those exact criteria. Would you like to search for other dates or course types?";
+
+      // Localized Fallback Message
+      let fallbackMsg = "I couldn't find any courses matching those exact criteria. Would you like to search for other dates or course types?";
+
+      if (userLanguage.startsWith('ro')) {
+        fallbackMsg = "Nu am găsit cursuri care să corespundă exact criteriilor. Dorești să căutăm alte date sau tipuri de cursuri?";
+      } else if (userLanguage.startsWith('pl')) {
+        fallbackMsg = "Nie znalazłem żadnych kursów spełniających te kryteria. Czy chcesz poszukać innych dat lub rodzajów kursów?";
+      } else if (userLanguage.startsWith('bg')) {
+        fallbackMsg = "Не намерих курсове, отговарящи на тези критерии. Искате ли да потърсите други дати или видове курсове?";
+      } else if (userLanguage.startsWith('hu')) {
+        fallbackMsg = "Nem találtam a feltételeknek megfelelő tanfolyamot. Szeretne más időpontokat vagy tanfolyamtípusokat keresni?";
+      } else if (userLanguage.startsWith('cs')) {
+        fallbackMsg = "Nenašel jsem žádné kurzy odpovídající těmto kritériím. Chcete hledat jiné termíny nebo typy kurzů?";
+      }
+
+      parsed.reply = fallbackMsg;
     }
 
     return parsed;
