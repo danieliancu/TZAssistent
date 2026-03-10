@@ -122,6 +122,31 @@ const detectLastCourseFamilyInHistory = (history: ChatMessage[]): string | null 
   return null;
 };
 
+const inferDisambiguationOptions = (courses: any[], query?: string): string[] => {
+  if (!Array.isArray(courses) || courses.length < 2) return [];
+
+  const names = [...new Set(
+    courses
+      .map(c => String(c?.name || '').split('|')[0].trim())
+      .filter(Boolean)
+  )];
+
+  if (names.length < 2) return [];
+
+  const hasRefresher = names.some(n => /refresher/i.test(n));
+  const hasNonRefresher = names.some(n => !/refresher/i.test(n));
+  const mixedRefresherSet = hasRefresher && hasNonRefresher;
+
+  const q = (query || '').trim();
+  const broadAcronymQuery = /^[A-Z]{2,10}$/.test(q.toUpperCase());
+
+  if (mixedRefresherSet || broadAcronymQuery) {
+    return names.slice(0, 4);
+  }
+
+  return [];
+};
+
 const localizeNoResultsWithCriteria = (
   userLanguage: string,
   criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string }
@@ -528,6 +553,13 @@ export const sendMessageToGemini = async (
       if (lastSearchResult?.courses && Array.isArray(lastSearchResult.courses) && lastSearchResult.courses.length > 0) {
         console.warn('AI found courses via tool but failed to include IDs. Auto-recovering IDs.');
         parsed.suggested_course_ids = lastSearchResult.courses.map((c: any) => c.id);
+      }
+    }
+
+    if ((!parsed.disambiguation_options || parsed.disambiguation_options.length === 0) && lastSearchResult?.courses) {
+      const inferredOptions = inferDisambiguationOptions(lastSearchResult.courses, appliedCriteria?.query);
+      if (inferredOptions.length > 0) {
+        parsed.disambiguation_options = inferredOptions;
       }
     }
 
