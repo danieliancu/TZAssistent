@@ -15,23 +15,12 @@ interface ChatInterfaceProps {
 const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[], language: string }> = ({ courseIds, allCourses, language }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // 1. Retrieve and Deduplicate Courses
+  // 1. Retrieve courses by IDs (preserve what search returned)
   const uniqueCourses = React.useMemo(() => {
     const relevantCourses = courseIds
       .map(id => allCourses.find(c => c.id === id))
       .filter((c): c is Course => !!c);
-
-    const seen = new Set();
-    return relevantCourses.filter(course => {
-      const cleanName = course.name.split('|')[0].trim();
-      const key = `${cleanName}|${course.start_date}|${course.venue}`;
-
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
+    return relevantCourses;
   }, [courseIds, allCourses]);
 
   // Scroll Handler

@@ -67,6 +67,8 @@ export interface SearchCriteriaSource {
   location: CriteriaFieldSource;
   dateStart: CriteriaFieldSource;
   dateEnd: CriteriaFieldSource;
+  deliveryType: CriteriaFieldSource;
+  courseVariant: CriteriaFieldSource;
 }
 
 export interface SearchCriteria {
@@ -74,6 +76,8 @@ export interface SearchCriteria {
   location?: string;
   dateStart?: string;
   dateEnd?: string;
+  deliveryType?: string;
+  courseVariant?: string;
   criteria_source: SearchCriteriaSource;
 }
 

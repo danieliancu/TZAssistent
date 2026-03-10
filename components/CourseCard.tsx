@@ -153,6 +153,35 @@ const parseIsoDate = (value: string): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const parseFlexibleDate = (value: string): Date | null => {
+  const input = (value || '').trim();
+  if (!input) return null;
+
+  const iso = parseIsoDate(input);
+  if (iso) return iso;
+
+  const dmy = input.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const yearRaw = Number(dmy[3]);
+    const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+    const parsed = new Date(year, month - 1, day);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const cleaned = input.replace(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+/i, '');
+  const parsed = new Date(cleaned);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const toDateKey = (date: Date): string => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 const toTitleCase = (value: string): string =>
   value
     .split(' ')
@@ -160,14 +189,61 @@ const toTitleCase = (value: string): string =>
     .join(' ');
 
 const formatLongDate = (value: string, language: string): string => {
-  const parsed = parseIsoDate(value);
+  const parsed = parseFlexibleDate(value);
   if (!parsed) return value;
   const formatted = parsed.toLocaleDateString(language, {
+    weekday: 'long',
     day: 'numeric',
     month: 'long',
     year: 'numeric',
   });
   return toTitleCase(formatted);
+};
+
+const getCourseSessionDates = (course: Course): string[] => {
+  const rawSessionDays = (
+    (course.attributes?.session_days_comma_separated as string) ||
+    course.session_days ||
+    course.dates_list ||
+    ''
+  ).trim();
+
+  const parsedDates: Date[] = [];
+
+  if (rawSessionDays) {
+    const tokens = rawSessionDays
+      .split(/[,;]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
+
+    for (const token of tokens) {
+      const parsed = parseFlexibleDate(token);
+      if (parsed) parsedDates.push(parsed);
+    }
+  }
+
+  if (parsedDates.length === 0) {
+    const start = parseFlexibleDate(course.start_date);
+    const end = parseFlexibleDate(course.last_date || course.end_date || course.start_date);
+    if (start && end && end >= start) {
+      const cursor = new Date(start);
+      while (cursor <= end) {
+        parsedDates.push(new Date(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    } else if (start) {
+      parsedDates.push(start);
+    }
+  }
+
+  const deduped = new Map<string, Date>();
+  for (const date of parsedDates) {
+    deduped.set(toDateKey(date), date);
+  }
+
+  return [...deduped.values()]
+    .sort((a, b) => a.getTime() - b.getTime())
+    .map(d => toDateKey(d));
 };
 
 const pluralize = (count: number, singular: string, plural: string): string =>
@@ -217,11 +293,11 @@ export const CourseCard: React.FC<CourseCardProps> = ({ course, onVisit, languag
     ? `${pluralize(totalDays, labels.daySingular, labels.dayPlural)}${totalHours > 0 ? ` (${pluralize(totalHours, labels.hourSingular, labels.hourPlural)})` : ''}`
     : (totalHours > 0 ? pluralize(totalHours, labels.hourSingular, labels.hourPlural) : labels.durationTbc);
 
-  const startFormatted = formatLongDate(course.start_date, language);
-  const endFormatted = formatLongDate(course.last_date || course.end_date, language);
-  const dateRangeDisplay = endFormatted && endFormatted !== startFormatted
-    ? `${startFormatted} - ${endFormatted}`
-    : startFormatted;
+  const sessionDates = getCourseSessionDates(course);
+  const dateLines = sessionDates.length > 0
+    ? sessionDates.map(date => formatLongDate(date, language))
+    : [formatLongDate(course.start_date, language)];
+  const showDateBullets = dateLines.length > 1;
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden min-w-[260px] max-w-[280px] flex-shrink-0 hover:shadow-md transition-all duration-200 flex flex-col">
@@ -250,7 +326,11 @@ export const CourseCard: React.FC<CourseCardProps> = ({ course, onVisit, languag
           <div className="flex items-start gap-2">
             <svg className="w-4 h-4 text-[#00a884] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             <div className="flex flex-col">
-              <span className="font-medium text-gray-700">{dateRangeDisplay}</span>
+              {dateLines.map((line, idx) => (
+                <span key={`${course.id}-date-${idx}`} className="font-medium text-gray-700">
+                  {showDateBullets ? `• ${line}` : line}
+                </span>
+              ))}
               {course.start_time && <span className="text-gray-400 text-[10px]">{course.start_time}</span>}
             </div>
           </div>

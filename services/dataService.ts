@@ -195,6 +195,9 @@ export const getSimplifiedCourseContext = (courses: Course[]): string => {
 };
 
 const MAX_RESULTS = 25;
+const DATE_EXPANSION_DAYS = 45;
+const MIN_RESULTS_TARGET = 3;
+const FUTURE_TOPUP_DAYS = 120;
 
 const QUERY_RELAX_MAP: Array<{ pattern: RegExp; relaxed: string[] }> = [
   { pattern: /nebosh.*national.*general.*certificate/i, relaxed: ['NEBOSH General', 'NEBOSH'] },
@@ -205,6 +208,18 @@ const QUERY_RELAX_MAP: Array<{ pattern: RegExp; relaxed: string[] }> = [
   { pattern: /site management safety training scheme/i, relaxed: ['SMSTS'] },
   { pattern: /site supervisor.*safety training scheme/i, relaxed: ['SSSTS'] },
 ];
+
+const normalizeDeliveryType = (value?: string): string | undefined => {
+  const v = (value || '').trim().toLowerCase();
+  if (!v) return undefined;
+
+  if (/(day[\s-]?release|weekly|once a week|one day a week|saptaman|saptamana|saptamanal)/i.test(v)) return 'day_release';
+  if (/weekend/i.test(v)) return 'weekend';
+  if (/block|consecutive|intensiv|intensive/i.test(v)) return 'block';
+  if (/online/i.test(v)) return 'online';
+
+  return v.replace(/\s+/g, '_');
+};
 
 const toResponseCourse = (c: Course) => {
   const dateObj = parseCourseDate(c.first_date || c.start_date);
@@ -232,6 +247,28 @@ const toResponseCourse = (c: Course) => {
   };
 };
 
+const isCourseBookable = (course: Course): boolean => {
+  if (course.is_closed) return false;
+  if (course.is_full) return false;
+  return course.available_spaces > 0;
+};
+
+const sortCoursesByUsefulness = (courses: Course[]): Course[] => {
+  return [...courses].sort((a, b) => {
+    const aBookable = isCourseBookable(a);
+    const bBookable = isCourseBookable(b);
+    if (aBookable !== bBookable) return aBookable ? -1 : 1;
+
+    const aSpaces = a.available_spaces || 0;
+    const bSpaces = b.available_spaces || 0;
+    if (aSpaces !== bSpaces) return bSpaces - aSpaces;
+
+    const da = parseCourseDate(a.first_date || a.start_date) || new Date(8640000000000000);
+    const db = parseCourseDate(b.first_date || b.start_date) || new Date(8640000000000000);
+    return da.getTime() - db.getTime();
+  });
+};
+
 const relaxQueryVariants = (query?: string): string[] => {
   if (!query || !query.trim()) return [];
   const normalized = query.trim();
@@ -256,9 +293,9 @@ const relaxQueryVariants = (query?: string): string[] => {
 
 const runCourseFilter = (
   allCourses: Course[],
-  criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string }
+  criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string; deliveryType?: string; courseVariant?: string }
 ): { filtered: Course[]; preDateFiltered: Course[] } => {
-  const { query, location, dateStart, dateEnd } = criteria;
+  const { query, location, dateStart, dateEnd, deliveryType, courseVariant } = criteria;
   let filtered = allCourses;
 
   if (query && query.trim() !== '') {
@@ -284,6 +321,28 @@ const runCourseFilter = (
         });
       });
     }
+  }
+
+  const normalizedDeliveryType = normalizeDeliveryType(deliveryType);
+  if (normalizedDeliveryType) {
+    filtered = filtered.filter(c => {
+      const code = normalizeDeliveryType(c.delivery_type_code || '');
+      const label = normalizeDeliveryType(c.delivery_type || '');
+
+      if (normalizedDeliveryType === 'online') {
+        return !!c.is_online || (c.venue || '').toLowerCase().includes('online');
+      }
+
+      return code === normalizedDeliveryType || label === normalizedDeliveryType;
+    });
+  }
+
+  if (courseVariant === 'refresher' || courseVariant === 'standard') {
+    filtered = filtered.filter(c => {
+      const name = `${c.name || ''} ${c.course_title || ''}`.toLowerCase();
+      const isRefresher = /\brefresher\b/.test(name);
+      return courseVariant === 'refresher' ? isRefresher : !isRefresher;
+    });
   }
 
   const preDateFiltered = filtered;
@@ -318,6 +377,8 @@ export const searchLocalCourses = (
     location?: string;
     dateStart?: string;
     dateEnd?: string;
+    deliveryType?: string;
+    courseVariant?: string;
     criteriaSource?: Partial<SearchCriteriaSource>;
   }
 ): SearchLocalResult => {
@@ -326,6 +387,8 @@ export const searchLocalCourses = (
     location: criteria.location?.trim() || undefined,
     dateStart: criteria.dateStart?.trim() || undefined,
     dateEnd: criteria.dateEnd?.trim() || undefined,
+    deliveryType: normalizeDeliveryType(criteria.deliveryType?.trim() || undefined),
+    courseVariant: criteria.courseVariant?.trim() || undefined,
   };
 
   const criteriaSource: SearchCriteriaSource = {
@@ -333,16 +396,26 @@ export const searchLocalCourses = (
     location: criteria.criteriaSource?.location || (baseCriteria.location ? 'current_message' : 'none'),
     dateStart: criteria.criteriaSource?.dateStart || (baseCriteria.dateStart ? 'current_message' : 'none'),
     dateEnd: criteria.criteriaSource?.dateEnd || (baseCriteria.dateEnd ? 'current_message' : 'none'),
+    deliveryType: criteria.criteriaSource?.deliveryType || (baseCriteria.deliveryType ? 'current_message' : 'none'),
+    courseVariant: criteria.criteriaSource?.courseVariant || (baseCriteria.courseVariant ? 'current_message' : 'none'),
   };
 
   const attempts: SearchAttempt[] = [];
+  let bestUnavailableCandidates: Course[] = [];
+  const hasAnyDateFilter = !!(baseCriteria.dateStart || baseCriteria.dateEnd);
 
   const runStage = (
     stage: string,
-    stageCriteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string }
+    stageCriteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string; deliveryType?: string; courseVariant?: string }
   ) => {
     const { filtered, preDateFiltered } = runCourseFilter(allCourses, stageCriteria);
-    const limitedResults = filtered.slice(0, MAX_RESULTS);
+    const sorted = sortCoursesByUsefulness(filtered);
+    const bookable = sorted.filter(isCourseBookable);
+    const limitedBookable = bookable.slice(0, MAX_RESULTS);
+    const limitedAny = sorted.slice(0, MAX_RESULTS);
+    if (bestUnavailableCandidates.length === 0 && limitedAny.length > 0) {
+      bestUnavailableCandidates = limitedAny;
+    }
     attempts.push({
       stage,
       criteria: {
@@ -350,33 +423,120 @@ export const searchLocalCourses = (
         location: stageCriteria.location,
         dateStart: stageCriteria.dateStart,
         dateEnd: stageCriteria.dateEnd,
+        deliveryType: stageCriteria.deliveryType,
+        courseVariant: stageCriteria.courseVariant,
       },
-      result_count: limitedResults.length,
+      result_count: limitedBookable.length,
     });
-    return { limitedResults, preDateFiltered };
+    return { limitedBookable, limitedAny, preDateFiltered };
+  };
+
+  const ensureMinimumBookable = (
+    baseCourses: Course[],
+    currentCriteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string; deliveryType?: string; courseVariant?: string }
+  ): {
+    courses: Course[];
+    messageSuffix?: string;
+    criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string; deliveryType?: string; courseVariant?: string };
+    criteriaSourcePatch?: Partial<SearchCriteriaSource>;
+  } => {
+    if (baseCourses.length >= MIN_RESULTS_TARGET) {
+      return { courses: baseCourses, criteria: currentCriteria };
+    }
+
+    const anchorFromCriteria = parseIsoDateLocal(currentCriteria.dateEnd || currentCriteria.dateStart || '');
+    const anchorFromResults = baseCourses.length > 0
+      ? parseCourseDate(baseCourses[baseCourses.length - 1].first_date || baseCourses[baseCourses.length - 1].start_date)
+      : null;
+    const anchor = anchorFromCriteria || anchorFromResults || new Date();
+
+    const topupStart = new Date(anchor);
+    topupStart.setDate(topupStart.getDate() + 1);
+    const topupEnd = new Date(topupStart);
+    topupEnd.setDate(topupEnd.getDate() + FUTURE_TOPUP_DAYS);
+
+    const topupCriteria = {
+      ...currentCriteria,
+      dateStart: formatDateLocal(topupStart),
+      dateEnd: formatDateLocal(topupEnd),
+    };
+
+    const { limitedBookable } = runStage('topup_future_dates', topupCriteria);
+    if (limitedBookable.length === 0) {
+      return { courses: baseCourses, criteria: currentCriteria };
+    }
+
+    const existingIds = new Set(baseCourses.map(c => c.id));
+    const extras = limitedBookable.filter(c => !existingIds.has(c.id));
+    if (extras.length === 0) {
+      return { courses: baseCourses, criteria: currentCriteria };
+    }
+
+    const merged = [...baseCourses, ...extras].slice(0, MIN_RESULTS_TARGET);
+    return {
+      courses: merged,
+      messageSuffix: 'FALLBACK_TOPUP_FUTURE_DATES',
+      criteria: topupCriteria,
+      criteriaSourcePatch: {
+        dateStart: hasAnyDateFilter ? 'history' : 'inferred',
+        dateEnd: 'inferred',
+      },
+    };
+  };
+
+  const appendMessage = (baseMessage: string, suffix?: string): string => {
+    if (!suffix) return baseMessage;
+    return `${baseMessage}|${suffix}`;
   };
 
   // 1) Strict search
   let activeCriteria = { ...baseCriteria };
-  let { limitedResults, preDateFiltered } = runStage('strict', activeCriteria);
-  if (limitedResults.length > 0) {
+  let { limitedBookable, limitedAny, preDateFiltered } = runStage('strict', activeCriteria);
+  if (limitedBookable.length > 0) {
+    const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
     return {
-      courses: limitedResults.map(toResponseCourse),
-      message: 'OK',
-      applied_criteria: { ...activeCriteria, criteria_source: criteriaSource },
+      courses: topped.courses.map(toResponseCourse),
+      message: appendMessage('OK', topped.messageSuffix),
+      applied_criteria: {
+        ...topped.criteria,
+        criteria_source: { ...criteriaSource, ...(topped.criteriaSourcePatch || {}) }
+      },
       attempts,
     };
+  }
+
+  // 1b) Relax delivery type if it was explicitly requested and no strict matches
+  if (activeCriteria.deliveryType) {
+    const relaxedDeliveryCriteria = { ...activeCriteria, deliveryType: undefined };
+    ({ limitedBookable, limitedAny, preDateFiltered } = runStage('delivery_type_relaxed', relaxedDeliveryCriteria));
+    if (limitedBookable.length > 0) {
+      activeCriteria = relaxedDeliveryCriteria;
+      const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
+      return {
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_RELAXED_DELIVERY_TYPE', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, deliveryType: 'none', ...(topped.criteriaSourcePatch || {}) }
+        },
+        attempts,
+      };
+    }
   }
 
   // 2) Drop stale location first
   if (activeCriteria.location && criteriaSource.location === 'history') {
     activeCriteria = { ...activeCriteria, location: undefined };
-    ({ limitedResults, preDateFiltered } = runStage('drop_stale_location', activeCriteria));
-    if (limitedResults.length > 0) {
+    ({ limitedBookable, limitedAny, preDateFiltered } = runStage('drop_stale_location', activeCriteria));
+    if (limitedBookable.length > 0) {
+      const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
       return {
-        courses: limitedResults.map(toResponseCourse),
-        message: 'FALLBACK_DROPPED_STALE_LOCATION',
-        applied_criteria: { ...activeCriteria, criteria_source: { ...criteriaSource, location: 'none' } },
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_DROPPED_STALE_LOCATION', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, location: 'none', ...(topped.criteriaSourcePatch || {}) }
+        },
         attempts,
       };
     }
@@ -385,42 +545,96 @@ export const searchLocalCourses = (
   // 3) Query relaxation
   const relaxedQueries = relaxQueryVariants(activeCriteria.query);
   for (const relaxedQuery of relaxedQueries) {
-    const relaxedCriteria = { ...activeCriteria, query: relaxedQuery };
-    ({ limitedResults, preDateFiltered } = runStage('query_relaxed', relaxedCriteria));
-    if (limitedResults.length > 0) {
+      const relaxedCriteria = { ...activeCriteria, query: relaxedQuery };
+    ({ limitedBookable, limitedAny, preDateFiltered } = runStage('query_relaxed', relaxedCriteria));
+    if (limitedBookable.length > 0) {
       activeCriteria = relaxedCriteria;
+      const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
       return {
-        courses: limitedResults.map(toResponseCourse),
-        message: 'FALLBACK_QUERY_RELAXED',
-        applied_criteria: { ...activeCriteria, criteria_source: { ...criteriaSource, query: 'inferred' } },
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_QUERY_RELAXED', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, query: 'inferred', ...(topped.criteriaSourcePatch || {}) }
+        },
         attempts,
       };
     }
   }
 
-  // 4) Online fallback (only if a location exists and it's not already online)
+  // 4) Expanded date window fallback
+  if (activeCriteria.dateStart || activeCriteria.dateEnd) {
+    const dateAnchor = parseIsoDateLocal(activeCriteria.dateEnd || activeCriteria.dateStart || '');
+    if (dateAnchor) {
+      const expandedEnd = new Date(dateAnchor);
+      expandedEnd.setDate(expandedEnd.getDate() + DATE_EXPANSION_DAYS);
+      const expandedCriteria = {
+        ...activeCriteria,
+        dateEnd: formatDateLocal(expandedEnd),
+      };
+      ({ limitedBookable, limitedAny, preDateFiltered } = runStage('date_expanded', expandedCriteria));
+      if (limitedBookable.length > 0) {
+        activeCriteria = expandedCriteria;
+        const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
+        return {
+          courses: topped.courses.map(toResponseCourse),
+          message: appendMessage('FALLBACK_EXPANDED_DATES', topped.messageSuffix),
+          applied_criteria: {
+            ...topped.criteria,
+            criteria_source: { ...criteriaSource, dateEnd: 'inferred', ...(topped.criteriaSourcePatch || {}) }
+          },
+          attempts,
+        };
+      }
+    }
+  }
+
+  // 5) Expanded location fallback (drop location constraint)
+  if (activeCriteria.location) {
+    const expandedLocationCriteria = { ...activeCriteria, location: undefined };
+    ({ limitedBookable, limitedAny, preDateFiltered } = runStage('location_expanded', expandedLocationCriteria));
+    if (limitedBookable.length > 0) {
+      activeCriteria = expandedLocationCriteria;
+      const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
+      return {
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_EXPANDED_LOCATION', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, location: 'inferred', ...(topped.criteriaSourcePatch || {}) }
+        },
+        attempts,
+      };
+    }
+  }
+
+  // 6) Online fallback (only if a location exists and it's not already online)
   if (activeCriteria.location && !activeCriteria.location.toLowerCase().includes('online')) {
     console.log(`No courses found in ${activeCriteria.location}. Trying fallback to 'Online'...`);
     activeCriteria = { ...activeCriteria, location: 'Online' };
-    ({ limitedResults, preDateFiltered } = runStage('online_fallback', activeCriteria));
-    if (limitedResults.length > 0) {
+    ({ limitedBookable, limitedAny, preDateFiltered } = runStage('online_fallback', activeCriteria));
+    if (limitedBookable.length > 0) {
+      const topped = ensureMinimumBookable(limitedBookable, activeCriteria);
       return {
-        courses: limitedResults.map(toResponseCourse),
-        message: 'FALLBACK_TO_ONLINE',
-        applied_criteria: { ...activeCriteria, criteria_source: { ...criteriaSource, location: 'inferred' } },
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_TO_ONLINE', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, location: 'inferred', ...(topped.criteriaSourcePatch || {}) }
+        },
         attempts,
       };
     }
   }
 
-  // 5) Nearest dates fallback
+  // 7) Nearest dates fallback
   if (activeCriteria.dateStart || activeCriteria.dateEnd) {
     const anchorDate = parseIsoDateLocal(activeCriteria.dateEnd || activeCriteria.dateStart || '');
     const anchor = anchorDate || new Date();
 
-    const nearestFuture = preDateFiltered
+    const nearestFuture = sortCoursesByUsefulness(preDateFiltered)
       .map(c => ({ course: c, date: parseCourseDate(c.first_date || c.start_date) }))
-      .filter(item => !!item.date && item.date >= anchor)
+      .filter(item => !!item.date && item.date >= anchor && isCourseBookable(item.course))
       .sort((a, b) => a.date!.getTime() - b.date!.getTime())
       .slice(0, 3)
       .map(item => item.course);
@@ -437,16 +651,30 @@ export const searchLocalCourses = (
     });
 
     if (nearestFuture.length > 0) {
+      const topped = ensureMinimumBookable(nearestFuture, activeCriteria);
       return {
-        courses: nearestFuture.map(toResponseCourse),
-        message: 'FALLBACK_TO_NEAREST_DATES',
-        applied_criteria: { ...activeCriteria, criteria_source: criteriaSource },
+        courses: topped.courses.map(toResponseCourse),
+        message: appendMessage('FALLBACK_TO_NEAREST_DATES', topped.messageSuffix),
+        applied_criteria: {
+          ...topped.criteria,
+          criteria_source: { ...criteriaSource, ...(topped.criteriaSourcePatch || {}) }
+        },
         attempts,
       };
     }
   }
 
-  // 6) No results
+  // 8) As a last meaningful fallback, return best matches even if unavailable.
+  if (bestUnavailableCandidates.length > 0) {
+    return {
+      courses: bestUnavailableCandidates.map(toResponseCourse),
+      message: 'FALLBACK_ONLY_UNAVAILABLE',
+      applied_criteria: { ...activeCriteria, criteria_source: criteriaSource },
+      attempts,
+    };
+  }
+
+  // 9) No results
   return {
     courses: [],
     message: 'NO_RESULTS',
