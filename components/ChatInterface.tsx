@@ -8,10 +8,11 @@ interface ChatInterfaceProps {
   allCourses: Course[];
   isLoading: boolean;
   onOptionClick: (option: string) => void;
+  language: string;
 }
 
 // Internal component to handle the scroll logic and refs for each message's course list
-const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = ({ courseIds, allCourses }) => {
+const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[], language: string }> = ({ courseIds, allCourses, language }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 1. Retrieve and Deduplicate Courses
@@ -71,7 +72,7 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
       >
         {uniqueCourses.map(course => (
           <div key={course.id} className="snap-start flex-shrink-0">
-            <CourseCard course={course} onVisit={handleCardClick} />
+            <CourseCard course={course} onVisit={handleCardClick} language={language} />
           </div>
         ))}
       </div>
@@ -90,8 +91,17 @@ const CourseCarousel: React.FC<{ courseIds: number[], allCourses: Course[] }> = 
   );
 };
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCourses, isLoading, onOptionClick }) => {
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCourses, isLoading, onOptionClick, language }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const introByLanguage: Record<string, string> = {
+    'en-US': 'Hi! I am your TargetZero agent. Ask me about available courses (e.g., SMSTS, First Aid) and I will help you find the best option.',
+    'ro-RO': 'Salut! Sunt agentul tau TargetZero. Intreaba-ma despre cursurile disponibile (ex: SMSTS, First Aid) si te ajut sa gasesti cea mai buna optiune.',
+    'pl-PL': 'Czesc! Jestem Twoim agentem TargetZero. Zapytaj mnie o dostepne kursy (np. SMSTS, First Aid), a pomoge Ci wybrac najlepsza opcje.',
+    'bg-BG': 'Zdravei! Az sam tvoiat TargetZero agent. Popitai me za nalichni kursove (napr. SMSTS, First Aid) i shte ti pomogna da izberesh nai-dobriia variant.',
+    'hu-HU': 'Szia! En vagyok a TargetZero asszisztensed. Kerdezz a rendelkezesre allo tanfolyamokrol (pl. SMSTS, First Aid), es segitek a legjobb opcio kivalasztasaban.',
+    'cs-CZ': 'Ahoj! Jsem tvuj TargetZero asistent. Zeptej se me na dostupne kurzy (napr. SMSTS, First Aid) a pomohu ti vybrat nejlepsi moznost.',
+  };
+  const introText = introByLanguage[language] || introByLanguage['en-US'];
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -112,7 +122,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
       {messages.length === 0 && (
         <div className="flex justify-center my-8">
           <div className="bg-[#fff5c4] text-gray-800 text-xs md:text-sm px-4 py-2 rounded-lg shadow-sm text-center max-w-sm">
-            Hi! I am your TargetZero agent. Ask me about available courses (e.g., SMSTS, First Aid) and I will help you find the best option.
+            {introText}
           </div>
         </div>
       )}
@@ -135,7 +145,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
                 }
                 return part;
               })}
-              <div className={`text-[10px] mt-1 text-right ${isUser ? 'text-gray-500' : 'text-gray-400'}`}>
+              <div className={`leading-[1] text-[10px] mt-1 text-right ${isUser ? 'text-gray-500' : 'text-gray-400'}`}>
                 {formatTime(msg.timestamp)}
               </div>
             </div>
@@ -157,7 +167,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, allCours
 
             {/* Course Cards Container (Carousel) */}
             {msg.courseIds && msg.courseIds.length > 0 && (
-              <CourseCarousel courseIds={msg.courseIds} allCourses={allCourses} />
+              <CourseCarousel courseIds={msg.courseIds} allCourses={allCourses} language={language} />
             )}
           </div>
         );

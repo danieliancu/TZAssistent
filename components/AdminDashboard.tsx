@@ -33,6 +33,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
         return `${m}m ${s}s`;
     };
 
+    const formatSearchPeriod = (period?: string) => {
+        if (!period) return "Not specified";
+        const match = period.match(/^(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})$/);
+        if (!match) return period;
+
+        const formatIso = (iso: string) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            const date = new Date(y, m - 1, d);
+            return date.toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            });
+        };
+
+        return `${formatIso(match[1])} - ${formatIso(match[2])}`;
+    };
+
     // Calculate Stats
     const totalVisits = sessions.length;
     const totalConversions = sessions.filter(s => s.converted).length;
@@ -101,13 +119,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
                                                 {new Date(session.startTime).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                             </td>
                                             <td className="px-6 py-4 font-mono text-xs">{session.ip}</td>
-                                            <td className="px-6 py-4">{formatDuration(session.durationSeconds)}</td>
+                                            <td className="px-6 py-4">{session.endTime ? formatDuration(session.durationSeconds) : "In progress..."}</td>
                                             <td className="px-6 py-4">
                                                 {session.searches.length > 0 ? (
                                                     <div className="flex flex-col gap-1">
                                                         {session.searches.map((s, i) => (
                                                             <span key={i} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                                                {s.term} <span className="text-blue-400 mx-1">•</span> {s.period}
+                                                                {s.term} <span className="text-blue-400 mx-1">•</span> {formatSearchPeriod(s.period)}
                                                             </span>
                                                         ))}
                                                     </div>
@@ -140,3 +158,4 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
         </div>
     );
 };
+

@@ -50,7 +50,7 @@ async function generateWithRetry(client: any, params: any, retries = 3, baseDela
 // 1. Tool for Searching Schedule
 const searchCoursesTool: FunctionDeclaration = {
   name: "searchCourses",
-  description: "Search for training courses based on name, acronym, or date range. Returns a list of available dates and venues.",
+  description: "Search for training courses based on name, acronym, location, or date range. Returns live schedule, price, spaces, and delivery metadata.",
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -90,6 +90,64 @@ const getCourseDetailsTool: FunctionDeclaration = {
   }
 };
 
+const COURSE_FAMILY_PATTERNS: Array<{ family: string; pattern: RegExp }> = [
+  { family: 'SMSTS', pattern: /\bsmsts\b|site management/i },
+  { family: 'SSSTS', pattern: /\bsssts\b|site supervisor/i },
+  { family: 'HSA', pattern: /\bhsa\b|health and safety awareness|green card|card verde/i },
+  { family: 'TWC', pattern: /\btwc\b|temporary works coordinator/i },
+  { family: 'TWS', pattern: /\btws\b|temporary works supervisor/i },
+  { family: 'NEBOSH_GENERAL', pattern: /nebosh.*(general|national general)/i },
+  { family: 'NEBOSH_CONSTRUCTION', pattern: /nebosh.*construction/i },
+  { family: 'NEBOSH', pattern: /\bnebosh\b/i },
+  { family: 'FIRST_AID', pattern: /first aid|\bfaw\b/i },
+  { family: 'IOSH', pattern: /\biosh\b/i },
+  { family: 'EUSR', pattern: /\beusr\b|water hygiene/i },
+];
+
+const LOCATION_HINT_PATTERN = /\b(london|stratford|wembley|ilford|barking|harrow|enfield|dartford|romford|uxbridge|heathrow|waltham abbey|essex|kent|birmingham|manchester|chelmsford|online)\b/i;
+const DATE_HINT_PATTERN = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|next|week|month|tomorrow|today|march|april|may|june|july|august|september|october|november|december)\b/i;
+
+const detectCourseFamily = (text: string): string | null => {
+  for (const matcher of COURSE_FAMILY_PATTERNS) {
+    if (matcher.pattern.test(text)) return matcher.family;
+  }
+  return null;
+};
+
+const detectLastCourseFamilyInHistory = (history: ChatMessage[]): string | null => {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const fam = detectCourseFamily(history[i].text || '');
+    if (fam) return fam;
+  }
+  return null;
+};
+
+const localizeNoResultsWithCriteria = (
+  userLanguage: string,
+  criteria: { query?: string; location?: string; dateStart?: string; dateEnd?: string }
+): string => {
+  const q = criteria.query || 'not specified';
+  const l = criteria.location || 'any location';
+  const d = (criteria.dateStart || criteria.dateEnd) ? `${criteria.dateStart || '...'} to ${criteria.dateEnd || '...'}` : 'any date';
+
+  if (userLanguage.startsWith('ro')) {
+    return `Nu am gasit cursuri pentru criteriile folosite: curs=\"${q}\", locatie=\"${l}\", perioada=\"${d}\". Vrei sa relaxez locatia sau perioada?`;
+  }
+  if (userLanguage.startsWith('pl')) {
+    return `Nie znalazlem kursow dla kryteriow: kurs=\"${q}\", lokalizacja=\"${l}\", okres=\"${d}\". Chcesz, zebym rozszerzyl lokalizacje lub daty?`;
+  }
+  if (userLanguage.startsWith('bg')) {
+    return `Ne namerih kursove za kriteriite: kurs=\"${q}\", lokaciya=\"${l}\", period=\"${d}\". Iskate li da razshirim lokaciya ili dati?`;
+  }
+  if (userLanguage.startsWith('hu')) {
+    return `Nem talaltam kurzust ezekkel a kriteriumokkal: kurzus=\"${q}\", helyszin=\"${l}\", idoszak=\"${d}\". Szeretne lazitani a helyszinen vagy datumon?`;
+  }
+  if (userLanguage.startsWith('cs')) {
+    return `Nenasel jsem kurzy pro tato kriteria: kurz=\"${q}\", lokalita=\"${l}\", obdobi=\"${d}\". Chcete rozsirit lokalitu nebo terminy?`;
+  }
+  return `I couldn't find courses with these criteria: course="${q}", location="${l}", date range="${d}". Do you want me to relax location or dates?`;
+};
+
 export const sendMessageToGemini = async (
   prompt: string | { audioData: string; mimeType: string },
   history: ChatMessage[],
@@ -108,7 +166,8 @@ export const sendMessageToGemini = async (
     month: 'long',
     day: 'numeric'
   });
-  const todayISO = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   const systemInstruction = `
     You are a helpful AI assistant for "Target Zero Training". Your role is to help users find training courses and answer questions about them.
@@ -118,6 +177,10 @@ export const sendMessageToGemini = async (
     You have two distinct tools. Use them appropriately:
     1.  **searchCourses**: Use this when the user asks about DATES, LOCATIONS, AVAILABILITY, or PRICES. (e.g., "When is the next SMSTS?", "Courses in London").
     2.  **getCourseDetails**: Use this when the user asks about CONTENT, EXAMS, SYLLABUS, or PREREQUISITES. (e.g., "What is the pass mark for SMSTS?", "What do I learn?", "Is lunch included?").
+    3.  Hybrid source of truth rule:
+        - Live commercial/schedule data (dates, spaces, price, delivery, online/offline, booking link) always comes from **searchCourses** results.
+        - Learning content (exam format, syllabus, prerequisites) comes from **getCourseDetails**.
+        - If there is any conflict, prioritize searchCourses for schedule/price/availability.
 
     CONTEXT RETENTION (CRITICAL):
     - **Always analyze the FULL conversation history** to extract implicit context.
@@ -159,6 +222,11 @@ export const sendMessageToGemini = async (
       - STEP 3: Found "June 2026" in previous message
       - STEP 4: Combine: "NEBOSH Construction" + "June 2026"
       - STEP 5: searchCourses(query: "NEBOSH Construction", dateStart: "2026-06-01", dateEnd: "2026-06-30")
+
+    CONTEXT RESET OVERRIDE (CRITICAL):
+    - If the current user message clearly switches to a different course topic, DO NOT inherit old location automatically.
+    - On clear course switch: keep prior date context if useful, but reset stale location unless user repeats location.
+    - In no-results responses, explicitly mention the exact criteria used (query, location, date range).
 
 
 
@@ -232,7 +300,8 @@ export const sendMessageToGemini = async (
       DO NOT say "I found courses". Instead, inform the user that no courses were found and suggest alternatives.
     - The User Interface will automatically display detailed cards for courses in 'suggested_course_ids'.
     - **DO NOT list the courses in your text reply.**
-    - **DO NOT mention specific dates, prices, or venues in the text reply** if they are in the cards.
+    - If the user asks a direct factual question about one result (example: "how many spaces are left?" or "what is the current price?"), you may mention the exact value in text using the tool result.
+    - Otherwise, avoid duplicating long date/price/venue lists in text because cards will show them.
     - Your text reply must be ONLY a short introductory sentence.
     - Example of GOOD reply: "I found the following SMSTS courses for next week:"
     - Example of BAD reply: "I found courses on Monday 12th, Tuesday 13th... [list of data]" → NEVER DO THIS.
@@ -287,6 +356,14 @@ export const sendMessageToGemini = async (
     }
     contents.push({ role: "user", parts: currentParts });
 
+    const currentPromptText = typeof prompt === 'string' ? prompt : '';
+    const currentPromptLower = currentPromptText.toLowerCase();
+    const currentCourseFamily = detectCourseFamily(currentPromptText);
+    const lastCourseFamily = detectLastCourseFamilyInHistory(history);
+    const topicChanged = !!(currentCourseFamily && lastCourseFamily && currentCourseFamily !== lastCourseFamily);
+    const hasExplicitLocationInCurrent = LOCATION_HINT_PATTERN.test(currentPromptText);
+    const hasExplicitDateInCurrent = DATE_HINT_PATTERN.test(currentPromptText);
+
     // 3. First API Call: Send Prompt + Tools (WITH RETRY)
     let response = await generateWithRetry(client, {
       model: "gemini-2.5-flash",
@@ -317,28 +394,47 @@ export const sendMessageToGemini = async (
         // HANDLER 1: SEARCH
         if (call.name === 'searchCourses' && call.args) {
           const args = call.args as any;
-          console.log("🔍 Executing Tool: searchCourses");
-          console.log("   Query:", args.query);
-          console.log("   Location:", args.location);
-          console.log("   Date Start:", args.dateStart);
-          console.log("   Date End:", args.dateEnd);
+          let resolvedQuery = args.query as string | undefined;
+          let resolvedLocation = args.location as string | undefined;
+          let resolvedDateStart = args.dateStart as string | undefined;
+          let resolvedDateEnd = args.dateEnd as string | undefined;
 
-          // --- ANALYTICS TRACKING ---
+          const queryFromCurrent = !!(resolvedQuery && currentPromptLower.includes(String(resolvedQuery).toLowerCase()));
+          const criteriaSource = {
+            query: queryFromCurrent || currentCourseFamily ? 'current_message' : (resolvedQuery ? 'history' : 'none'),
+            location: hasExplicitLocationInCurrent ? 'current_message' : (resolvedLocation ? 'history' : 'none'),
+            dateStart: hasExplicitDateInCurrent ? 'current_message' : (resolvedDateStart ? 'history' : 'none'),
+            dateEnd: hasExplicitDateInCurrent ? 'current_message' : (resolvedDateEnd ? 'history' : 'none'),
+          } as const;
+
+          if (topicChanged && !hasExplicitLocationInCurrent && resolvedLocation) {
+            resolvedLocation = undefined;
+          }
+
+          console.log("Executing Tool: searchCourses");
+          console.log("   Query:", resolvedQuery);
+          console.log("   Location:", resolvedLocation);
+          console.log("   Date Start:", resolvedDateStart);
+          console.log("   Date End:", resolvedDateEnd);
+          console.log("   Topic Changed:", topicChanged);
+
           let dateInfo = "Anytime";
-          if (args.dateStart || args.dateEnd) dateInfo = `${args.dateStart || ''} to ${args.dateEnd || ''}`;
-          analytics.logSearch(args.query, dateInfo);
-          // --------------------------
+          if (resolvedDateStart || resolvedDateEnd) dateInfo = `${resolvedDateStart || ''} to ${resolvedDateEnd || ''}`;
+          analytics.logSearch(resolvedQuery, dateInfo);
 
           const searchResult = searchLocalCourses(allCourses, {
-            query: args.query,
-            location: args.location,
-            dateStart: args.dateStart,
-            dateEnd: args.dateEnd
+            query: resolvedQuery,
+            location: resolvedLocation,
+            dateStart: resolvedDateStart,
+            dateEnd: resolvedDateEnd,
+            criteriaSource,
           });
 
           console.log("   Results found:", searchResult.courses?.length || 0);
+          console.log("   Search message:", searchResult.message);
+          console.log("   Applied criteria:", searchResult.applied_criteria);
           if (searchResult.courses && searchResult.courses.length > 0) {
-            console.log("   First 3 course IDs:", searchResult.courses.slice(0, 3).map(c => c.id));
+            console.log("   First 3 course IDs:", searchResult.courses.slice(0, 3).map((c: any) => c.id));
           }
 
           functionResponses.push({
@@ -349,7 +445,6 @@ export const sendMessageToGemini = async (
             }
           });
         }
-
         // HANDLER 2: DETAILS
         if (call.name === 'getCourseDetails' && call.args) {
           const args = call.args as any;
@@ -408,53 +503,60 @@ export const sendMessageToGemini = async (
     if (!textResponse) throw new Error("Empty response from AI");
 
     const parsed: AIResponseSchema = JSON.parse(textResponse);
+    const lastFunctionResponse = contents
+      .slice().reverse()
+      .find(c => c.role === 'user' && c.parts?.some((p: any) => p.functionResponse?.name === 'searchCourses'));
+    const searchPart = lastFunctionResponse?.parts?.find((p: any) => p.functionResponse?.name === 'searchCourses');
+    const lastSearchResult = searchPart?.functionResponse?.response?.result;
+    const lastSearchMessage = lastSearchResult?.message || '';
+    const appliedCriteria = lastSearchResult?.applied_criteria || {};
 
-    // POST-PROCESSING: Detect misleading responses
-    // Only correct if AI uses very specific phrases that imply cards will be shown
     const stronglyClaimsFindingCourses = parsed.reply.toLowerCase().includes('i found the following') ||
       parsed.reply.toLowerCase().includes('here are the') ||
       parsed.reply.toLowerCase().includes('these courses') ||
-      parsed.reply.toLowerCase().includes('iată câteva opțiuni') ||
-      parsed.reply.toLowerCase().includes('am găsit') ||
+      parsed.reply.toLowerCase().includes('iata cateva optiuni') ||
+      parsed.reply.toLowerCase().includes('am gasit') ||
       parsed.reply.toLowerCase().includes('acestea sunt');
 
-    // RECOVERY LOGIC: If AI found courses via tool but forgot to include IDs, recover them.
     if (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0) {
-      // Look for the last searchCourses result in the conversation history we just built
-      const lastFunctionResponse = contents
-        .slice().reverse() // Search from end
-        .find(c => c.role === 'user' && c.parts?.some((p: any) => p.functionResponse?.name === 'searchCourses'));
-
-      if (lastFunctionResponse) {
-        const searchPart = lastFunctionResponse.parts.find((p: any) => p.functionResponse?.name === 'searchCourses');
-        const searchResult = searchPart?.functionResponse?.response?.result;
-
-        if (searchResult?.courses && Array.isArray(searchResult.courses) && searchResult.courses.length > 0) {
-          console.warn("AI found courses via tool but failed to include IDs. Auto-recovering IDs.");
-          parsed.suggested_course_ids = searchResult.courses.map((c: any) => c.id);
-        }
+      if (lastSearchResult?.courses && Array.isArray(lastSearchResult.courses) && lastSearchResult.courses.length > 0) {
+        console.warn('AI found courses via tool but failed to include IDs. Auto-recovering IDs.');
+        parsed.suggested_course_ids = lastSearchResult.courses.map((c: any) => c.id);
       }
     }
 
+    if (lastSearchMessage.includes('FALLBACK_DROPPED_STALE_LOCATION') && parsed.suggested_course_ids?.length > 0) {
+      parsed.reply = userLanguage.startsWith('ro')
+        ? 'Nu am gasit rezultate cu locatia anterioara, asa ca am cautat fara acea locatie. Acestea sunt cele mai relevante rezultate.'
+        : 'I could not find results with the previous location, so I searched without that location. These are the best matches.';
+    }
+
+    if (lastSearchMessage.includes('FALLBACK_QUERY_RELAXED') && parsed.suggested_course_ids?.length > 0) {
+      parsed.reply = userLanguage.startsWith('ro')
+        ? 'Nu am gasit rezultate pe denumirea exacta, asa ca am cautat pe varianta echivalenta. Acestea sunt optiunile disponibile.'
+        : 'I could not find results for the exact name, so I searched with an equivalent query. Here are the available options.';
+    }
+
+    if (lastSearchMessage.includes('FALLBACK_TO_NEAREST_DATES') && parsed.suggested_course_ids?.length > 0) {
+      parsed.reply = userLanguage.startsWith('ro')
+        ? 'Nu am gasit cursuri exact in perioada ceruta, dar acestea sunt urmatoarele date disponibile. Spune-mi daca vrei alta perioada.'
+        : 'I could not find courses in the exact date range, but these are the next closest available dates. Let me know if you want another date range.';
+    }
+
+    if (lastSearchMessage.includes('FALLBACK_TO_ONLINE') && parsed.suggested_course_ids?.length > 0) {
+      parsed.reply = userLanguage.startsWith('ro')
+        ? 'Nu am gasit in zona ceruta. Acestea sunt alternativele online disponibile.'
+        : 'I could not find courses in that area, but here are online alternatives.';
+    }
+
+    if (lastSearchMessage.includes('NO_RESULTS')) {
+      parsed.reply = localizeNoResultsWithCriteria(userLanguage, appliedCriteria);
+      parsed.suggested_course_ids = [];
+    }
+
     if (stronglyClaimsFindingCourses && (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0)) {
-      console.warn("AI strongly claimed to find courses but returned empty IDs. Correcting response.");
-
-      // Localized Fallback Message
-      let fallbackMsg = "I couldn't find any courses matching those exact criteria. Would you like to search for other dates or course types?";
-
-      if (userLanguage.startsWith('ro')) {
-        fallbackMsg = "Nu am găsit cursuri care să corespundă exact criteriilor. Dorești să căutăm alte date sau tipuri de cursuri?";
-      } else if (userLanguage.startsWith('pl')) {
-        fallbackMsg = "Nie znalazłem żadnych kursów spełniających te kryteria. Czy chcesz poszukać innych dat lub rodzajów kursów?";
-      } else if (userLanguage.startsWith('bg')) {
-        fallbackMsg = "Не намерих курсове, отговарящи на тези критерии. Искате ли да потърсите други дати или видове курсове?";
-      } else if (userLanguage.startsWith('hu')) {
-        fallbackMsg = "Nem találtam a feltételeknek megfelelő tanfolyamot. Szeretne más időpontokat vagy tanfolyamtípusokat keresni?";
-      } else if (userLanguage.startsWith('cs')) {
-        fallbackMsg = "Nenašel jsem žádné kurzy odpovídající těmto kritériím. Chcete hledat jiné termíny nebo typy kurzů?";
-      }
-
-      parsed.reply = fallbackMsg;
+      console.warn('AI strongly claimed to find courses but returned empty IDs. Correcting response.');
+      parsed.reply = localizeNoResultsWithCriteria(userLanguage, appliedCriteria);
     }
 
     return parsed;
@@ -488,3 +590,5 @@ export const sendMessageToGemini = async (
     };
   }
 };
+
+

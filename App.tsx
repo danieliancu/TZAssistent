@@ -18,6 +18,7 @@ interface IWindow extends Window {
 
 function App() {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -41,6 +42,16 @@ function App() {
     { code: 'cs-CZ', name: 'Čeština', label: 'ČEŠTINA' },
   ];
 
+  const inputPlaceholders: Record<string, { idle: string; listening: string }> = {
+    'en-US': { idle: 'Type a message...', listening: 'Listening... (Speak now)' },
+    'ro-RO': { idle: 'Scrie un mesaj...', listening: 'Ascult... (Vorbeste acum)' },
+    'pl-PL': { idle: 'Wpisz wiadomosc...', listening: 'Slucham... (Mow teraz)' },
+    'bg-BG': { idle: 'Napishete suobshtenie...', listening: 'Slusham... (Govorete sega)' },
+    'hu-HU': { idle: 'Irj uzenetet...', listening: 'Figyelek... (Beszeljen most)' },
+    'cs-CZ': { idle: 'Napiste zpravu...', listening: 'Posloucham... (Mluvte nyni)' },
+  };
+  const currentPlaceholder = inputPlaceholders[language] || inputPlaceholders['en-US'];
+
   const recognitionRef = useRef<any>(null);
   const sessionInitRef = useRef(false);
 
@@ -60,14 +71,29 @@ function App() {
     }
   }, [language]);
 
-  // Initial Data Load & Analytics Init
+  const refreshCourses = async () => {
+    const data = await fetchCourses();
+    setCourses(data);
+    setDataLoaded(true);
+    setLastUpdatedAt(new Date());
+  };
+
+  // Initial Data Load, Auto Refresh & Analytics Init
   useEffect(() => {
-    const loadData = async () => {
-      const data = await fetchCourses();
-      setCourses(data);
-      setDataLoaded(true);
+    refreshCourses();
+
+    const intervalId = window.setInterval(() => {
+      refreshCourses();
+    }, 5 * 60 * 1000);
+
+    const handleWindowFocus = () => {
+      refreshCourses();
     };
-    loadData();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshCourses();
+      }
+    };
 
     // Initialize Analytics Session only once
     if (!sessionInitRef.current) {
@@ -80,13 +106,23 @@ function App() {
       analytics.updateDuration();
     };
     window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener("beforeunload", handleUnload);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       // Also update on component unmount (e.g. dev hot reload)
       analytics.updateDuration();
     };
   }, []);
+
+  const formatLastUpdated = (date: Date | null) => {
+    if (!date) return 'Sync pending';
+    return `Last updated ${date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  };
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -261,7 +297,7 @@ function App() {
             <div className="flex flex-col">
               <span className="text-white font-semibold text-md leading-tight">TargetZero Agent</span>
               <span className="text-white/80 text-xs">
-                {dataLoaded ? 'Online' : 'Connecting...'}
+                {dataLoaded ? `Online | ${formatLastUpdated(lastUpdatedAt)}` : 'Connecting...'}
               </span>
             </div>
           </div>
@@ -355,6 +391,7 @@ function App() {
           allCourses={courses}
           isLoading={isLoading}
           onOptionClick={(option) => handleSendMessage(option)}
+          language={language}
         />
 
         {/* Input Area */}
@@ -364,7 +401,7 @@ function App() {
             <input
               type="text"
               className="flex-1 bg-transparent outline-none text-gray-700 placeholder-gray-400 text-sm md:text-base"
-              placeholder={isListening ? "Listening... (Speak now)" : "Type a message..."}
+              placeholder={isListening ? currentPlaceholder.listening : currentPlaceholder.idle}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
