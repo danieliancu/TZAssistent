@@ -302,7 +302,8 @@ export const sendMessageToGemini = async (
     - **DO NOT list the courses in your text reply.**
     - If the user asks a direct factual question about one result (example: "how many spaces are left?" or "what is the current price?"), you may mention the exact value in text using the tool result.
     - Otherwise, avoid duplicating long date/price/venue lists in text because cards will show them.
-    - Your text reply must be ONLY a short introductory sentence.
+    - Your text reply must be ONLY a short introductory sentence for searchCourses card results.
+    - If getCourseDetails is used, provide full details in text (clear bullets/sections), not just an intro line.
     - Example of GOOD reply: "I found the following SMSTS courses for next week:"
     - Example of BAD reply: "I found courses on Monday 12th, Tuesday 13th... [list of data]" → NEVER DO THIS.
 
@@ -318,7 +319,7 @@ export const sendMessageToGemini = async (
     properties: {
       reply: {
         type: Type.STRING,
-        description: "The text response. Keep it short if courses are found.",
+        description: "The text response. Keep it short for searchCourses card listings, but provide full details when getCourseDetails is used.",
       },
       suggested_course_ids: {
         type: Type.ARRAY,
@@ -379,6 +380,9 @@ export const sendMessageToGemini = async (
     const candidates = response.candidates;
     const firstCandidate = candidates?.[0];
     const functionCalls = firstCandidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+
+    let detailsToolUsed = false;
+    let lastDetailsResult = '';
 
     if (functionCalls && functionCalls.length > 0) {
       // Add the model's "thought" (the function call) to the history
@@ -455,6 +459,8 @@ export const sendMessageToGemini = async (
           // --------------------------
 
           const detailResult = getCourseDetails(args.courseType);
+          detailsToolUsed = true;
+          lastDetailsResult = detailResult || '';
           functionResponses.push({
             functionResponse: {
               name: 'getCourseDetails',
@@ -554,9 +560,25 @@ export const sendMessageToGemini = async (
       parsed.suggested_course_ids = [];
     }
 
+    const teaserDetailsReply =
+      parsed.reply.trim().endsWith(':') ||
+      parsed.reply.toLowerCase().includes('mai multe detalii') ||
+      parsed.reply.toLowerCase().includes('more details');
+
+    if (detailsToolUsed && lastDetailsResult && (teaserDetailsReply || parsed.reply.trim().length < 80)) {
+      if (userLanguage.startsWith('ro')) {
+        parsed.reply = `Iata detaliile complete:\n\n${lastDetailsResult}`;
+      } else {
+        parsed.reply = `Here are the full details:\n\n${lastDetailsResult}`;
+      }
+      parsed.suggested_course_ids = [];
+    }
+
     if (stronglyClaimsFindingCourses && (!parsed.suggested_course_ids || parsed.suggested_course_ids.length === 0)) {
       console.warn('AI strongly claimed to find courses but returned empty IDs. Correcting response.');
-      parsed.reply = localizeNoResultsWithCriteria(userLanguage, appliedCriteria);
+      if (!detailsToolUsed) {
+        parsed.reply = localizeNoResultsWithCriteria(userLanguage, appliedCriteria);
+      }
     }
 
     return parsed;
@@ -590,5 +612,7 @@ export const sendMessageToGemini = async (
     };
   }
 };
+
+
 
 

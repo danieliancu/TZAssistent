@@ -54,6 +54,7 @@ function App() {
 
   const recognitionRef = useRef<any>(null);
   const sessionInitRef = useRef(false);
+  const ignoreSpeechResultsRef = useRef(false);
 
   // Update Speech Recognition Language dynamically
   useEffect(() => {
@@ -136,6 +137,7 @@ function App() {
       recognition.lang = 'en-US';
 
       recognition.onresult = (event: any) => {
+        if (ignoreSpeechResultsRef.current) return;
         try {
           const results = Array.from(event.results);
           let finalTranscript = '';
@@ -164,6 +166,7 @@ function App() {
       recognition.onend = () => {
         // Only set listening to false if we didn't manually stop it (e.g. timeout)
         // However, React state updates can be asynchronous, so we trust the user interaction mostly.
+        ignoreSpeechResultsRef.current = false;
         setIsListening(false);
       };
 
@@ -184,13 +187,13 @@ function App() {
 
     // Stop listening if sending
     if (isListening && recognitionRef.current) {
+      ignoreSpeechResultsRef.current = true;
       recognitionRef.current.stop();
       setIsListening(false);
     }
 
-    if (textOverride === undefined) {
-      setInputValue(''); // Clear input if it came from the input field
-    }
+    // Always clear visible input after send (typed or voice transcript)
+    setInputValue('');
 
     // Add User Message
     const userMsg: ChatMessage = {
@@ -250,9 +253,11 @@ function App() {
     }
 
     if (isListening) {
+      ignoreSpeechResultsRef.current = true;
       recognitionRef.current.stop();
       setIsListening(false);
     } else {
+      ignoreSpeechResultsRef.current = false;
       setInputValue('');
       try {
         recognitionRef.current.start();
